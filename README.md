@@ -55,7 +55,7 @@ EthereumPhishingDetector/
 │
 └── archive/                           ← Mã nguồn cũ/thử nghiệm (xem archive/README.md)
     ├── stage5_train_baselines_paper*.py   ← Bản tái lập PEAE độc lập (đã merge)
-    ├── stage6_adversarial_attacks_experimental.py  ← Có GGS/CRING/SPOOL/MIMICRY
+    ├── stage6_adversarial_attacks_experimental.py  ← Có GGS/CRING/SPOOL
     ├── stage6_transfer_eval.py            ← TRANSFER analysis
     └── *_old.py                           ← Phiên bản cũ hơn các stage
 ```

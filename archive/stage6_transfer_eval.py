@@ -35,7 +35,7 @@ import stage9_k2_upgrade as k2
 from stage5_train_baselines import MODELS, to_pyg
 from stage6_adversarial_attacks import (
     ATTACKS, ATTACK_IDS, TargetCache, build_graph,
-    _set_base, _atk_rng, load_normal_templates,
+    _set_base, _atk_rng,
 )
 
 
@@ -54,7 +54,7 @@ def main():
     ap.add_argument("--attacker", choices=list(MODELS), default="peaegnn",
                     help="model used to GUIDE attack (only matters for GGS)")
     ap.add_argument("--ckpt_seed", type=int, default=42)
-    ap.add_argument("--attacks", nargs="+", default=["GGS", "SPOOL", "CRING", "MIMICRY"])
+    ap.add_argument("--attacks", nargs="+", default=["GGS", "SPOOL", "CRING"])
     ap.add_argument("--budget", type=int, default=50)
     ap.add_argument("--n_targets", type=int, default=100)
     ap.add_argument("--seed", type=int, default=42)
@@ -91,11 +91,6 @@ def main():
     sample = phish.sample(n=min(args.n_targets, len(phish)), random_state=args.seed).reset_index(drop=True)
     print(f"Sampling {len(sample)} phishing targets (of {len(phish)})")
 
-    # Templates cho MIMICRY
-    templates = []
-    if "MIMICRY" in args.attacks:
-        templates = load_normal_templates(k2.NORMAL_HOP1_DIR, split, n_sample=100, seed=args.seed)
-
     # dP[attacker_model][eval_model][attack] = list of (p_clean - p_attacked)
     results = {am: {em: {atk: [] for atk in args.attacks} for em in models} for am in models}
 
@@ -110,8 +105,7 @@ def main():
         p_clean = {em: predict(models[em], g_clean, stats, device) for em in models}
 
         ctx = {"model": attacker_model, "stats": stats, "device": device,
-               "cache": c, "build_fn": build_graph, "n_cands": 4,
-               "normal_templates": templates}
+               "cache": c, "build_fn": build_graph, "n_cands": 4}
 
         for atk in args.attacks:
             try:

@@ -17,7 +17,7 @@ Mục `archive/` **không được tham chiếu từ pipeline hiện tại** —
 
 | File | Lý do archive |
 |------|----------------|
-| `stage6_adversarial_attacks_experimental.py` | Chứa 5 attacks thêm: **GGS, CRING, SPOOL, DEFENSE-ADAPTIVE, MIMICRY**. Thầy đã quyết **giữ 7 attacks gốc**, không dùng attacks mới |
+| `stage6_adversarial_attacks_experimental.py` | Chứa 3 attacks thêm: **GGS, CRING, SPOOL**. Thầy đã quyết **giữ 7 attacks gốc**, không dùng attacks mới |
 | `stage6_transfer_eval.py` | Transferability analysis cross-architecture; cũng không dùng |
 
 ### Phiên bản cũ của stage scripts

@@ -273,132 +273,6 @@ def attack_stc_hv(raw, target, b, rng, pool, **kw):
     return attack_stc(raw, target, b, rng, pool, hv=True, **kw)
 
 
-def load_normal_templates(normal_hop1_dir, split_df, n_sample=100, seed=42,
-                           max_tx=1500, min_tx=10):
-    """
-    Nap mau cac vi normal lam template cho MIMICRY.
-    Chi lay vi trong tap TRAIN de tranh ro ri thong tin test.
-    Moi template co: in/out counts, value mean/std vao/ra, time span, so partner,
-    chuoi txs thuc te de lay mau timestamp pattern.
-    """
-    rng = np.random.default_rng(seed)
-    # Chi lay normal addresses tu TRAIN
-    normal_train = split_df[(split_df['label'] == 0) &
-                             (split_df['partition'] == 'train')]['address'].str.lower().tolist()
-    if not normal_train:
-        return []
-    sample = rng.choice(normal_train, size=min(n_sample * 3, len(normal_train)),
-                        replace=False).tolist()
-    templates = []
-    for addr in sample:
-        f = Path(normal_hop1_dir) / f"{addr}.json"
-        if not f.exists() or f.stat().st_size <= 2:
-            continue
-        try:
-            txs = json.loads(f.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if len(txs) < min_tx or len(txs) > max_tx:
-            continue
-        a_lc = addr
-        in_vals = [int(t.get("value", 0) or 0) for t in txs
-                   if (t.get("to") or "").lower() == a_lc
-                   and int(t.get("value", 0) or 0) > 0]
-        out_vals = [int(t.get("value", 0) or 0) for t in txs
-                    if (t.get("from") or "").lower() == a_lc
-                    and int(t.get("value", 0) or 0) > 0]
-        timestamps = [int(t.get("timeStamp", 0) or 0) for t in txs if t.get("timeStamp")]
-        if len(in_vals) < 3 or len(out_vals) < 3 or len(timestamps) < 5:
-            continue
-        in_partners = {(t.get("from") or "").lower() for t in txs
-                       if (t.get("to") or "").lower() == a_lc}
-        out_partners = {(t.get("to") or "").lower() for t in txs
-                        if (t.get("from") or "").lower() == a_lc}
-        templates.append({
-            "address":      addr,
-            "in_count":     len(in_vals),
-            "out_count":    len(out_vals),
-            "in_val_log":   np.log10(np.array(in_vals, dtype=np.float64) + 1),
-            "out_val_log":  np.log10(np.array(out_vals, dtype=np.float64) + 1),
-            "time_span":    max(1, max(timestamps) - min(timestamps)),
-            "n_in_peers":   len(in_partners),
-            "n_out_peers":  len(out_partners),
-        })
-        if len(templates) >= n_sample:
-            break
-    return templates
-
-
-def attack_mimicry(raw, target, b, rng, pool, normal_templates=None, w0=0, **_):
-    """
-    MIMICRY: chon 1 normal address lam template, sinh tx de day feature cua target
-    ve gan template:
-      - Match in/out count ratio
-      - Sample value tu log-distribution cua template (mo phong value pattern)
-      - Rai timestamp theo time_span cua template
-      - Dung n_peers wallets de khong chi 2 partners
-    Can `normal_templates` list (do main nap san).
-
-    Moi budget unit = 6 tx (giong ADAPTIVE-STC). b=20 => ~120 tx.
-    """
-    if not normal_templates:
-        raise ValueError("MIMICRY can normal_templates (them vao ctx)")
-
-    # Chon template
-    tmpl = normal_templates[int(rng.integers(0, len(normal_templates)))]
-
-    # Dem feature hien tai cua target
-    t_lc = target.lower()
-    cur_in = sum(1 for t in raw if (t.get("to") or "").lower() == t_lc)
-    cur_out = sum(1 for t in raw if (t.get("from") or "").lower() == t_lc)
-
-    # Du lieu template
-    tgt_in, tgt_out = tmpl["in_count"], tmpl["out_count"]
-    span = min(tmpl["time_span"], 180 * 24 * 3600)   # cap 180 ngay
-    n_in_peers = max(2, min(tmpl["n_in_peers"], 20))
-    n_out_peers = max(2, min(tmpl["n_out_peers"], 20))
-
-    # Tinh so tx can them (clamp vao budget * 6)
-    total_budget = b * 6
-    diff_in = max(0, tgt_in - cur_in)
-    diff_out = max(0, tgt_out - cur_out)
-    if diff_in + diff_out == 0:
-        # target da co du tx -> chi them bang gui/nhan tu partners moi
-        diff_in = total_budget // 2
-        diff_out = total_budget - diff_in
-    scale = total_budget / max(diff_in + diff_out, 1)
-    n_add_in = min(int(diff_in * scale), total_budget)
-    n_add_out = total_budget - n_add_in
-
-    # Camouflage wallets (nhieu hon ADAPTIVE)
-    camo_ins = [_fake_wallet(target, 130_000 + w0 + i) for i in range(n_in_peers)]
-    camo_outs = [_fake_wallet(target, 140_000 + w0 + i) for i in range(n_out_peers)]
-
-    t0 = _last_ts(raw) + 3600
-    new = []
-
-    # Incoming txs
-    for i in range(n_add_in):
-        peer = camo_ins[int(rng.integers(0, len(camo_ins)))]
-        log_v = tmpl["in_val_log"][int(rng.integers(0, len(tmpl["in_val_log"])))]
-        val = max(1, int(10 ** log_v))
-        ts = t0 + int(rng.uniform(0, span))
-        new.append(_mk_tx(peer, target, val, ts, _gp(rng, pool)))
-
-    # Outgoing txs
-    for i in range(n_add_out):
-        peer = camo_outs[int(rng.integers(0, len(camo_outs)))]
-        log_v = tmpl["out_val_log"][int(rng.integers(0, len(tmpl["out_val_log"])))]
-        val = max(1, int(10 ** log_v))
-        ts = t0 + int(rng.uniform(0, span))
-        new.append(_mk_tx(target, peer, val, ts, _gp(rng, pool)))
-
-    # Sort txs by timestamp (realistic)
-    new.sort(key=lambda t: int(t["timeStamp"]))
-
-    return new, set(camo_ins) | set(camo_outs)
-
-
 def attack_adaptive_stc_lv(raw, target, b, rng, pool, **kw):
     """ADAPTIVE-STC y het (6 tx/don vi, 90 ngay, can bang chieu) nhung gia tri NHO nhu STC goc."""
     return attack_adaptive_stc(raw, target, b, rng, pool, low_value=True, **kw)
@@ -485,9 +359,9 @@ def attack_ggs(raw, target, b, rng, pool, model=None, stats=None, device="cpu",
 def attack_spool(raw, target, b, rng, pool, w0=0, n_sybils=5, **_):
     """
     SYBIL-POOL (SPOOL): dung K=5 vi sybil, tai su dung chung cho moi tx.
-    Khac MIMICRY: chi 5 vi (so voi 20-40 cua MIMICRY), xay dung history dan dan.
+    Chi 5 vi, xay dung history dan dan.
     Khac TOH/TIH: moi vi se co nhieu tx (hop-1 nut co nhieu tx -> trong giau hon).
-    6 tx / budget (tuong duong ADAPTIVE / MIMICRY).
+    6 tx / budget (tuong duong ADAPTIVE).
     """
     sybils = [_fake_wallet(target, 400_000 + w0 + i) for i in range(n_sybils)]
     t0 = _last_ts(raw) + 3600
@@ -557,108 +431,6 @@ def attack_cring(raw, target, b, rng, pool, w0=0, ring_partners=None, **_):
     return new, wal
 
 
-def _adaptive_stc_variant(raw, target, b_units, rng, pool, w0, params):
-    """
-    ADAPTIVE-STC voi tham so tuy chinh:
-      params = (dir_bias, value_log_lo, value_log_hi, span_days, k_txs_per_unit)
-    """
-    dir_bias, v_lo, v_hi, span_days, k = params
-    span = span_days * 24 * 3600
-    t0, new = _last_ts(raw) + 3600, []
-    camo_in = _fake_wallet(target, 100_000 + w0)
-    camo_out = _fake_wallet(target, 100_001 + w0)
-    t_lc = target.lower()
-    in_count = sum(1 for t in raw if (t.get("to") or "").lower() == t_lc)
-    out_count = sum(1 for t in raw if (t.get("from") or "").lower() == t_lc)
-    total = int(b_units * k)
-    for i in range(total):
-        val = int(10 ** rng.uniform(v_lo, v_hi))
-        ts = t0 + int((i / max(total - 1, 1)) * span)
-        # dir_bias in [-1, 1]: -1 = chi incoming, +1 = chi outgoing, 0 = balance
-        bias_prob = (dir_bias + 1) / 2  # map ve [0, 1]
-        force_out = rng.random() < bias_prob
-        want_out = force_out or (in_count > out_count and not force_out)
-        if want_out:
-            new.append(_mk_tx(target, camo_out, val, ts, _gp(rng, pool))); out_count += 1
-        else:
-            new.append(_mk_tx(camo_in, target, val, ts, _gp(rng, pool))); in_count += 1
-    return new, {camo_in, camo_out}
-
-
-def attack_defense_adaptive(raw, target, b, rng, pool, model=None, stats=None,
-                             device="cpu", cache=None, build_fn=None,
-                             n_cands=8, w0=0, **_):
-    """
-    DEFENSE-ADAPTIVE: dung ADAPTIVE-STC motif lam base, moi buoc search param space
-    (dir_bias, value_scale, time_span) qua n_cands=8 candidates, pick candidate lam
-    P(phishing) giam nhieu nhat. Khac GREEDY-QUERY o cho:
-      1. Base motif: ADAPTIVE-STC (manh 50% ASR vs basic 2-3%)
-      2. Search parameter: dir_bias, value_log range, time span
-      3. Multi-scale budget: 1-3 units per step tuy giai doan
-      4. Early stop khi P(phish) < 0.3
-
-    Can model, stats, device, cache, build_fn. Dung voi mo hinh phong thu (RA-SAGE,
-    AdvTrain) de do do ben truoc tan cong thich ung.
-    """
-    if model is None or build_fn is None or cache is None or stats is None:
-        raise ValueError("DEFENSE-ADAPTIVE can model, stats, cache, build_fn")
-
-    def prob(txs):
-        g = build_fn(cache, txs if txs else None)
-        if g is None:
-            return None
-        batch = Batch.from_data_list([to_pyg(g, stats)]).to(device)
-        with torch.no_grad():
-            return float(F.softmax(model(batch), dim=1)[0, 1].item())
-
-    # Param space: (dir_bias, value_log_lo, value_log_hi, span_days, k)
-    param_grid = [
-        ( 0.0, 16, 18, 90, 6),   # ADAPTIVE-STC default
-        ( 0.0, 14, 15, 90, 6),   # ADAPTIVE-STC-LV
-        (-0.5, 16, 18, 90, 6),   # bias incoming
-        (+0.5, 16, 18, 90, 6),   # bias outgoing
-        ( 0.0, 16, 18, 30, 6),   # short span
-        ( 0.0, 16, 18, 180, 8),  # long span, more txs
-        ( 0.0, 15, 17, 60, 4),   # smaller motif
-        ( 0.0, 17, 19, 90, 6),   # larger value
-    ][:n_cands]
-
-    acc, wal = [], set()
-    cur = prob([])
-    if cur is None:
-        return [], set()
-
-    # Chia budget: moi step = 1 unit (6 tx), stop khi het budget hoac flipped
-    patience, no_improve = 3, 0
-    for step in range(b):
-        if cur < 0.1:   # da flip rong rai (threshold thap hon)
-            break
-        best = None
-        for ci, params in enumerate(param_grid):
-            r_cand = np.random.default_rng(int(rng.integers(0, 2**31)))
-            try:
-                cand_txs, cand_wal = _adaptive_stc_variant(
-                    raw + acc, target, 1, r_cand, pool,
-                    w0=(step + 1) * 100 + ci, params=params,
-                )
-            except Exception:
-                continue
-            pv = prob(acc + cand_txs)
-            if pv is not None and (best is None or pv < best[0]):
-                best = (pv, cand_txs, cand_wal)
-        if best is None:
-            break   # khong motif nao build duoc graph -> stop
-        # Luon accept best (ke ca khi P khong giam) - thuong co cumulative effect
-        if best[0] >= cur - 1e-4:
-            no_improve += 1
-            if no_improve >= patience:   # 3 steps lien tiep khong giam P -> stop
-                break
-        else:
-            no_improve = 0
-        cur, acc, wal = best[0], acc + best[1], wal | best[2]
-    return acc, wal
-
-
 BASE_ATTACKS = ["TOH", "TIH", "BPH-T2P", "BPH-P2T", "STC", "MWR"]
 ATTACKS = {
     "TOH": attack_toh, "TIH": attack_tih,
@@ -667,18 +439,16 @@ ATTACKS = {
     "ADAPTIVE-STC": attack_adaptive_stc, "COMBINED": attack_combined,
     "GREEDY-QUERY": attack_greedy_query,
     "STC-HV": attack_stc_hv, "ADAPTIVE-STC-LV": attack_adaptive_stc_lv,   # ablation gia tri
-    "DEFENSE-ADAPTIVE": attack_defense_adaptive,   # white-box adaptive to defense model
-    "MIMICRY": attack_mimicry,   # copy pattern cua 1 normal address lam template
     "GGS": attack_ggs,            # white-box gradient-guided synthesis
     "SPOOL": attack_spool,        # K=5 sybil pool, reuse across txs
     "CRING": attack_cring,        # coordinated-ring 2 partners cross-txs
 }
 # Chi so co dinh cua tung tan cong (de seed ngau nhien KHONG doi khi doi thu tu/tap --attacks)
-ATTACK_IDS = {n: i for i, n in enumerate(ATTACKS)}
+ATTACK_IDS = {"TOH": 0, "TIH": 1, "BPH-T2P": 2, "BPH-P2T": 3, "STC": 4, "MWR": 5, "ADAPTIVE-STC": 6,
+              "COMBINED": 7, "GREEDY-QUERY": 8, "STC-HV": 9, "ADAPTIVE-STC-LV": 10,
+              "GGS": 13, "SPOOL": 14, "CRING": 15}
 TXS_PER_UNIT = {"TOH": 1, "TIH": 1, "BPH-T2P": 2, "BPH-P2T": 2, "STC": 4, "MWR": 3, "ADAPTIVE-STC": 6,
                 "STC-HV": 4, "ADAPTIVE-STC-LV": 6,
-                "DEFENSE-ADAPTIVE": 6,  # trung binh 6 tx/budget (ADAPTIVE-STC motif)
-                "MIMICRY": 6,            # 6 tx/budget giong ADAPTIVE
                 "GGS": 6,                # 6 tx/budget (early stop ~var)
                 "SPOOL": 6,              # 6 tx/budget
                 "CRING": 6}              # 6 tx/budget
@@ -697,7 +467,7 @@ def expected_txs(atk, b):
     if atk == "COMBINED":
         t, s_, p_ = _combined_split(b)
         return t + 4 * s_ + 2 * p_
-    if atk in ("GREEDY-QUERY", "DEFENSE-ADAPTIVE", "GGS"):
+    if atk in ("GREEDY-QUERY", "GGS"):
         return None   # so tx bien thien theo early-stop
     return b * TXS_PER_UNIT[atk]
 
@@ -834,18 +604,6 @@ def main():
     label_of = dict(zip(split["address"].str.lower(), split["label"].astype(int)))
     test = split[split["partition"] == "test"].reset_index(drop=True)
 
-    # Nap normal templates cho MIMICRY (chi lay tu TRAIN, chong ro ri test info)
-    normal_templates = []
-    if "MIMICRY" in args.attacks:
-        print(f"Loading normal templates for MIMICRY...")
-        normal_templates = load_normal_templates(
-            normal_hop1_dir=k2.NORMAL_HOP1_DIR,
-            split_df=split, n_sample=100, seed=args.seed,
-        )
-        print(f"  Loaded {len(normal_templates)} normal templates "
-              f"(train set, 10-1500 txs each)")
-        if not normal_templates:
-            raise RuntimeError("MIMICRY: khong co template nao hop le")
     if args.max_targets:   # lay mau NGAU NHIEN co dinh seed (head() co the lech theo thoi gian/nhan)
         test = test.sample(n=min(args.max_targets, len(test)), random_state=0).reset_index(drop=True)
     print(f"Test targets: {len(test)} (phishing={int((test['label']==1).sum())})")
@@ -886,8 +644,7 @@ def main():
         if label == 1:
             last_real = _last_ts(c.txs)
             ctx = {"model": model, "stats": stats, "device": device, "cache": c,
-                   "build_fn": build_graph, "n_cands": args.greedy_cands,
-                   "normal_templates": normal_templates}
+                   "build_fn": build_graph, "n_cands": args.greedy_cands}
             for atk in args.attacks:
                 for b in args.budgets:
                     new, wal = ATTACKS[atk](c.txs, addr, b, _atk_rng(args.seed, addr, ATTACK_IDS[atk], b),
