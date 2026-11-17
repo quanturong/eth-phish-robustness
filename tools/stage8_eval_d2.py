@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import average_precision_score, f1_score, precision_recall_fscore_support, roc_auc_score
+from sklearn.metrics import average_precision_score, f1_score, precision_recall_fscore_support, roc_auc_score, roc_curve
 from tqdm import tqdm
 
 try:
@@ -58,7 +58,17 @@ def metrics(y, p):
             "roc_auc": float(roc_auc_score(y, p)) if len(set(y)) > 1 else float("nan"),
             "prec_phishing": float(prec[1]), "rec_phishing": float(rec[1]), "rec_normal": float(rec[0]),
             "mean_p_phishing_class": float(p[y == 1].mean()), "mean_p_normal_class": float(p[y == 0].mean()),
-            "pred_phishing_rate": float(pred.mean()), "n": int(len(y)), "phishing_rate": float(y.mean())}
+            "pred_phishing_rate": float(pred.mean()), "n": int(len(y)), "phishing_rate": float(y.mean()),
+            "recall_at_fpr10": recall_at_fpr(y, p, 0.10)}
+
+
+def recall_at_fpr(y, p, fpr_max):
+    """Recall phishing tai nguong cao nhat ma FPR tren lop normal <= fpr_max (cung cach eval_d2_peae_paper.py)."""
+    if len(set(y)) < 2:
+        return float("nan")
+    fpr, tpr, _ = roc_curve(y, p)
+    idx = np.searchsorted(fpr, fpr_max)
+    return float(tpr[min(idx, len(tpr) - 1)])
 
 
 def main():
@@ -142,7 +152,7 @@ def main():
         results["agg"][m] = {key: (float(np.mean([results["per_seed"][m][f"seed{s}"]["all"][key] for _, s in ks])),
                                    float(np.std([results["per_seed"][m][f"seed{s}"]["all"][key] for _, s in ks])))
                              for key in ("macro_f1", "pr_auc", "roc_auc", "rec_phishing", "prec_phishing",
-                                         "mean_p_phishing_class", "mean_p_normal_class", "pred_phishing_rate")}
+                                         "mean_p_phishing_class", "mean_p_normal_class", "pred_phishing_rate", "recall_at_fpr10")}
     (out / "stage8_zeroshot_d2.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
 
     pr = results["phishing_rate"]

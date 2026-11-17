@@ -56,6 +56,7 @@ def eval_model(model, graphs, stats, device):
         'roc_auc': roc_auc, 'pr_auc': pr_auc, 'macro_f1': macro_f1,
         'prec_phishing': float(pprec), 'rec_phishing': float(prec), 'f1_phishing': float(pf1),
         'recall_at_fpr10': rec_at_fpr10,
+        'pred_phishing_rate': float(preds.mean()),
     }
 
 
@@ -102,7 +103,7 @@ def main():
     if results[args.model]['per_seed']:
         agg = {}
         for k in ['roc_auc', 'pr_auc', 'macro_f1', 'prec_phishing', 'rec_phishing',
-                  'f1_phishing', 'recall_at_fpr10']:
+                  'f1_phishing', 'recall_at_fpr10', 'pred_phishing_rate']:
             vals = [r[k] for r in results[args.model]['per_seed']]
             agg[k] = {'mean': float(np.mean(vals)), 'std': float(np.std(vals, ddof=0))}
         results[args.model]['agg'] = agg
